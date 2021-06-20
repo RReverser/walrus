@@ -12,6 +12,7 @@ use crate::parse::IndicesToIds;
 use crate::tombstone_arena::{Id, Tombstone, TombstoneArena};
 use crate::ty::TypeId;
 use crate::ty::ValType;
+use crate::CodeTransform;
 use std::cmp;
 use wasmparser::{FuncValidator, FunctionBody, ValidatorResources};
 
@@ -336,6 +337,16 @@ impl Module {
         // necessary and it's a bottleneck!
         let mut bodies = Vec::with_capacity(functions.len());
         for (i, (body, mut validator)) in functions.into_iter().enumerate() {
+            let mut reader = body.get_binary_reader();
+
+            let pos = reader.original_position();
+            let loc = if let Some(ref on_instr_pos) = on_instr_pos {
+                on_instr_pos(&pos)
+            } else {
+                InstrLocId::new(pos as u32)
+            };
+            println!("Adding function at {:X?} ({:X?})", pos, loc);
+
             let index = (num_imports + i) as u32;
             let id = indices.get_func(index)?;
             let ty = match self.funcs.arena[id].kind {
@@ -365,7 +376,6 @@ impl Module {
             self.types.add_entry_ty(&results);
 
             // Next up comes all the locals of the function.
-            let mut reader = body.get_binary_reader();
             for _ in 0..reader.read_var_u32()? {
                 let pos = reader.original_position();
                 let count = reader.read_var_u32()?;
@@ -382,13 +392,13 @@ impl Module {
                 }
             }
 
-            bodies.push((id, reader, args, ty, validator));
+            bodies.push((id, reader, args, ty, validator, loc));
         }
 
         // Wasm modules can often have a lot of functions and this operation can
         // take some time, so parse all function bodies in parallel.
         let results = maybe_parallel!(bodies.(into_iter | into_par_iter))
-            .map(|(id, body, args, ty, validator)| {
+            .map(|(id, body, args, ty, validator, loc)| {
                 (
                     id,
                     LocalFunction::parse(
@@ -400,6 +410,7 @@ impl Module {
                         body,
                         on_instr_pos,
                         validator,
+                        loc,
                     ),
                 )
             })
@@ -441,16 +452,21 @@ fn used_local_functions<'a>(cx: &mut EmitContext<'a>) -> Vec<(FunctionId, &'a Lo
 }
 
 fn collect_non_default_code_offsets(
-    code_transform: &mut Vec<(InstrLocId, usize)>,
+    code_transform: &mut CodeTransform,
     code_offset: usize,
     map: Vec<(InstrLocId, usize)>,
 ) {
-    for (src, dst) in map {
-        let dst = dst + code_offset;
-        if !src.is_default() {
-            code_transform.push((src, dst));
-        }
-    }
+    println!("Remapping offset: {:X?}", code_offset);
+    code_transform
+        .instrs
+        .extend(map.into_iter().filter_map(|(src, dst)| {
+            if src.is_default() {
+                None
+            } else {
+                println!("Remapping {:X?} -> {:X?}", dst, dst + code_offset);
+                Some((src, dst + code_offset))
+            }
+        }));
 }
 
 impl Emit for ModuleFunctions {
@@ -462,9 +478,17 @@ impl Emit for ModuleFunctions {
         }
 
         let mut cx = cx.start_section(Section::Code);
-        cx.encoder.usize(functions.len());
 
         let generate_map = cx.module.config.preserve_code_transform;
+        if generate_map {
+            assert!(cx.code_transform.is_none());
+            cx.code_transform = Some(CodeTransform::new(
+                cx.module.code_section_offset,
+                cx.encoder.pos(),
+            ));
+        }
+
+        cx.encoder.usize(functions.len());
 
         // Functions can typically take awhile to serialize, so serialize
         // everything in parallel. Afterwards we'll actually place all the
@@ -474,7 +498,11 @@ impl Emit for ModuleFunctions {
                 log::debug!("emit function {:?} {:?}", id, cx.module.funcs.get(id).name);
                 let mut wasm = Vec::new();
                 let mut encoder = Encoder::new(&mut wasm);
-                let mut map = if generate_map { Some(Vec::new()) } else { None };
+                let mut map = if generate_map {
+                    Some(vec![(func.builder().loc, 0)])
+                } else {
+                    None
+                };
 
                 let (used_locals, local_indices) = func.emit_locals(cx.module, &mut encoder);
                 func.emit_instructions(cx.indices, &local_indices, &mut encoder, map.as_mut());
@@ -488,7 +516,11 @@ impl Emit for ModuleFunctions {
             let code_offset = cx.encoder.pos();
             cx.encoder.raw(&wasm);
             if let Some(map) = map {
-                collect_non_default_code_offsets(&mut cx.code_transform, code_offset, map);
+                collect_non_default_code_offsets(
+                    cx.code_transform.as_mut().unwrap(),
+                    code_offset,
+                    map,
+                );
             }
             cx.indices.locals.insert(id, local_indices);
             cx.locals.insert(id, used_locals);

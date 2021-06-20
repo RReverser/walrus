@@ -15,7 +15,7 @@ pub struct EmitContext<'a> {
     pub indices: &'a mut IdsToIndices,
     pub encoder: Encoder<'a>,
     pub locals: IdHashMap<Function, IdHashSet<Local>>,
-    pub code_transform: CodeTransform,
+    pub code_transform: Option<CodeTransform>,
 }
 
 pub struct SubContext<'a, 'cx> {

@@ -45,9 +45,10 @@ impl LocalFunction {
         mut body: wasmparser::BinaryReader<'_>,
         on_instr_pos: Option<&(dyn Fn(&usize) -> InstrLocId + Sync + Send + 'static)>,
         mut validator: FuncValidator<ValidatorResources>,
+        loc: InstrLocId,
     ) -> Result<LocalFunction> {
         let mut func = LocalFunction {
-            builder: FunctionBuilder::without_entry(ty),
+            builder: FunctionBuilder::without_entry_at(ty, loc),
             args,
         };
 

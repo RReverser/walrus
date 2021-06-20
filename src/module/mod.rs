@@ -71,6 +71,7 @@ pub struct Module {
     /// custom section.
     pub name: Option<String>,
     pub(crate) config: ModuleConfig,
+    code_section_offset: InstrLocId,
 }
 
 /// Maps from an offset of an instruction in the input Wasm to its offset in the
@@ -79,7 +80,30 @@ pub struct Module {
 /// Note that an input offset may be mapped to multiple output offsets, and vice
 /// versa, due to transformations like function inlinining or constant
 /// propagation.
-pub type CodeTransform = Vec<(InstrLocId, usize)>;
+#[derive(Debug)]
+pub struct CodeTransform {
+    code_section_offset: (InstrLocId, usize),
+    pub(crate) instrs: Vec<(InstrLocId, usize)>
+}
+
+impl CodeTransform {
+    pub(crate) fn new(src_code_section_offset: InstrLocId, dst_code_section_offset: usize) -> Self {
+        Self {
+            code_section_offset: (src_code_section_offset, dst_code_section_offset),
+            instrs: Vec::new(),
+        }
+    }
+
+    /// Return a (source location, destination) mapping for offset of code section itself.
+    pub fn code_section_offset_mapping(&self) -> (InstrLocId, usize) {
+        self.code_section_offset
+    }
+
+    /// Returns an iterator over (source location, destination) mappings of individual instructions.
+    pub fn instr_mappings(&self) -> impl '_ + Iterator<Item = (InstrLocId, usize)> {
+        self.instrs.iter().copied()
+    }
+}
 
 impl Module {
     /// Create a default, empty module that uses the given configuration.
@@ -199,6 +223,11 @@ impl Module {
                 }
                 Payload::CodeSectionStart { count, range, .. } => {
                     validator.code_section_start(count, &range)?;
+                    ret.code_section_offset = if let Some(on_instr_loc) = &config.on_instr_loc {
+                        on_instr_loc(&range.start)
+                    } else {
+                        InstrLocId::new(range.start as u32)
+                    };
                 }
                 Payload::CodeSectionEntry(body) => {
                     let validator = validator.code_section_entry()?;
@@ -314,7 +343,7 @@ impl Module {
             indices,
             encoder: Encoder::new(&mut wasm),
             locals: Default::default(),
-            code_transform: Vec::new(),
+            code_transform: None,
         };
         self.types.emit(&mut cx);
         self.imports.emit(&mut cx);
@@ -349,8 +378,8 @@ impl Module {
 
             log::debug!("emitting custom section {}", section.name());
 
-            if self.config.preserve_code_transform {
-                section.apply_code_transform(&cx.code_transform);
+            if let Some(code_transform) = &cx.code_transform {
+                section.apply_code_transform(code_transform);
             }
 
             cx.custom_section(&section.name())

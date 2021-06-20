@@ -18,6 +18,7 @@ pub struct FunctionBuilder {
     pub(crate) ty: TypeId,
     pub(crate) entry: Option<InstrSeqId>,
     pub(crate) name: Option<String>,
+    pub(crate) loc: InstrLocId,
 }
 
 impl FunctionBuilder {
@@ -28,7 +29,7 @@ impl FunctionBuilder {
         results: &[ValType],
     ) -> FunctionBuilder {
         let ty = types.add(params, results);
-        let mut builder = FunctionBuilder::without_entry(ty);
+        let mut builder = FunctionBuilder::without_entry_at(ty, Default::default());
         let entry_ty = types.add_entry_ty(results);
         let entry = builder.dangling_instr_seq(entry_ty).id;
         builder.entry = Some(entry);
@@ -37,13 +38,14 @@ impl FunctionBuilder {
 
     /// Create a builder that doesn't have a function body / entry
     /// sequence. Callers are responsible for initializing its entry.
-    pub(crate) fn without_entry(ty: TypeId) -> FunctionBuilder {
+    pub(crate) fn without_entry_at(ty: TypeId, loc: InstrLocId) -> FunctionBuilder {
         let arena = TombstoneArena::<InstrSeq>::default();
         FunctionBuilder {
             arena,
             ty,
             entry: None,
             name: None,
+            loc,
         }
     }
 

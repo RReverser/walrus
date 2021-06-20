@@ -54,6 +54,8 @@ impl<'instr> Visitor<'instr> for Emit<'_, '_> {
         self.blocks.push(seq.id());
         debug_assert_eq!(self.blocks.len(), self.block_kinds.len());
 
+        println!("Starting {:?} at 0x{:X}", self.block_kinds.last().unwrap(), self.encoder.pos());
+
         match self.block_kinds.last().unwrap() {
             BlockKind::Block => {
                 self.encoder.byte(0x02); // block
@@ -84,6 +86,8 @@ impl<'instr> Visitor<'instr> for Emit<'_, '_> {
 
         debug_assert_eq!(self.blocks.len(), self.block_kinds.len());
 
+        println!("Ending {:?} at 0x{:X}", popped_kind.unwrap(), self.encoder.pos());
+
         if let BlockKind::If = popped_kind.unwrap() {
             // We're about to visit the `else` block, so push its kind.
             //
@@ -93,10 +97,14 @@ impl<'instr> Visitor<'instr> for Emit<'_, '_> {
         } else {
             self.encoder.byte(0x0b); // end
         }
+
+        println!("Ended {:?} at {:X?}", popped_kind.unwrap(), self.encoder.pos());
     }
 
     fn visit_instr(&mut self, instr: &'instr Instr, instr_loc: &'instr InstrLocId) {
         use self::Instr::*;
+
+        println!("Instr {:?} at {:X?} -> {:X?}", instr, instr_loc, self.encoder.pos());
 
         if let Some(map) = self.map.as_mut() {
             let pos = self.encoder.pos();
